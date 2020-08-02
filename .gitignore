@@ -1,0 +1,18 @@
+# Flutter/Dart/Pub related
+**/doc/api/
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+build/
+
+# Directory created by dartdoc
+doc/api/
+**/telegram_config.yaml
+**/firebase_config.yaml
+
+.idea/
+*~
+
