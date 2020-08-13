@@ -309,6 +309,13 @@ packages:
       relative: true
     source: path
     version: "1.0.0+1"
+  nag_me_services:
+    dependency: "direct main"
+    description:
+      path: "../nag_me_services"
+      relative: true
+    source: path
+    version: "1.0.0+1"
   neat_periodic_task:
     dependency: "direct main"
     description:
@@ -476,7 +483,7 @@ packages:
       name: teledart
       url: "https://pub.dartlang.org"
     source: hosted
-    version: "0.0.46"
+    version: "0.0.47"
   term_glyph:
     dependency: transitive
     description:

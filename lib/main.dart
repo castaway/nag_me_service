@@ -2,6 +2,8 @@ import 'dart:io';
 import 'package:neat_periodic_task/neat_periodic_task.dart';
 import 'package:firedart/firedart.dart';
 import 'package:nag_me_lib/nag_me.dart';
+import 'package:nag_me_services/nag_me_services.dart';
+import 'package:nag_me_services/notifier_service.dart';
 import 'config.dart';
 import 'hive_store.dart';
 
@@ -18,9 +20,6 @@ Future<void> main() async {
   fbAuth.signInState.listen((state) => print("Signed ${state ? "in" : "out"}"));
   // var admin = await FirebaseAuth.instance.getUser();
 
-  // Cache of services (filled in [getChangedNotifiers]
-  var _services = <String, Object>{};
-
   var firestore = Firestore(fbConfig.projectId, auth: fbAuth);
   // All users
   var users = await firestore.collection('users').get();
@@ -30,9 +29,12 @@ Future<void> main() async {
   await Future.forEach(savedServiceData, (service) {
     serviceData[service.id] = service.map;
   });
+  // Cache of services (filled in [getChangedNotifiers]
+  var _services = loadServices(serviceData);
+
   // Fetch initial set of notifiers, we need to start a service per type:
   Map<String, Map<String, Notifier>> notifiers =
-      await getChangedNotifiers(users, {}, _services, serviceData);
+      await getChangedNotifiers(users, {}, _services);
 
   // Schedulers cache: [user.id][reminder.id][notifier.id] (firebase default ids)
   var schedulers =
@@ -80,11 +82,6 @@ Future<void> main() async {
 
             // Only create schedules that're supposed to start approximately now
             var now = DateTime.now().toUtc();
-            print(now.add(Duration(minutes: 5)).isAfter(reminder.next_time));
-            print(now
-                .subtract(Duration(minutes: 5))
-                .isBefore(reminder.next_time));
-            print(schedulers[user.id][doc.id].containsKey(not_id));
             if (now.add(Duration(minutes: 5)).isAfter(reminder.next_time) &&
                 now
                     .subtract(Duration(minutes: 5))
@@ -128,13 +125,20 @@ Future<void> main() async {
   await saveServices(firestore, _services);
 }
 
+// NotifierService?
+Map<String, NotifierService> loadServices(Map serviceData) {
+  TelegramService newService = TelegramService();
+  newService.fromFirebase(serviceData['Telegram']);
+
+  return <String, NotifierService>{'Engine.Telegram': newService};
+}
 /// Fetches each user's notifier settings from FireBase
 ///
 /// Each user may setup one or more notifiers, one of each type
 /// We should only have one service object per notifier type, so we copy it across
 /// returns a Map of user_id:notifier_id:Notifier object
 Future<Map<String, Map<String, Notifier>>> getChangedNotifiers(
-    users, Map notifiers, Map services, [Map serviceData]) async {
+    users, Map notifiers, Map services) async {
   Map<String, Map<String, Notifier>> result = {};
 
   await Future.forEach(users, (user) async {
@@ -162,15 +166,14 @@ Future<Map<String, Map<String, Notifier>>> getChangedNotifiers(
       } else {
         services[notification['engine']] ??= checkNotifier.settings.service;
       }
-      if(serviceData != null) {
-        services[notification['engine']].fromFirebase(
-            serviceData[checkNotifier.settings.name]);
-      }
+//      if(serviceData != null) {
+//        services[notification['engine']].fromFirebase(
+//            serviceData[checkNotifier.settings.name]);
+//      }
       result[user.id] ??= {};
       result[user.id][notification.id] = checkNotifier;
     });
   });
-  print('return: ${result.keys}');
   return result;
 }
 
@@ -181,7 +184,6 @@ void startServices(Map services) {
 }
 
 Future<void> saveServices(firestore, Map services) async {
-  print('Saving services');
   for(var service in services.values) {
     var saveData = service.forFirebase();
      await firestore.collection('services').document(saveData['name']).set(saveData['data']);
@@ -224,6 +226,7 @@ void checkSchedulers(Map services, Map schedulers, List reminders) {
 }
 
 // Store the updated "next dates" back to Firestore.
+// Should probably only do the changed ones
 void updateReminders(Firestore firestore, List reminders) async {
   for (Reminder reminder in reminders) {
     var asMap = reminder.toMap();
