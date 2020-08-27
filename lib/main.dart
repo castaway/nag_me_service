@@ -2,8 +2,7 @@ import 'dart:io';
 import 'package:neat_periodic_task/neat_periodic_task.dart';
 import 'package:firedart/firedart.dart';
 import 'package:nag_me_lib/nag_me.dart';
-import 'package:nag_me_services/nag_me_services.dart';
-import 'package:nag_me_services/notifier_service.dart';
+import 'package:nag_me_lib/nag_me_services.dart';
 import 'config.dart';
 import 'hive_store.dart';
 
@@ -23,6 +22,12 @@ Future<void> main() async {
   var firestore = Firestore(fbConfig.projectId, auth: fbAuth);
   // All users
   var users = await firestore.collection('users').get();
+  // user saved data:
+  var userData = {};
+  await Future.forEach(users, (user) {
+    userData[user.id] = user.map;
+  });
+
   // service saved data:
   var savedServiceData = await firestore.collection('services').get();
   var serviceData = {};
@@ -30,7 +35,7 @@ Future<void> main() async {
     serviceData[service.id] = service.map;
   });
   // Cache of services (filled in [getChangedNotifiers]
-  var _services = loadServices(serviceData);
+  var _services = loadServices(serviceData, userData);
 
   // Fetch initial set of notifiers, we need to start a service per type:
   Map<String, Map<String, Notifier>> notifiers =
@@ -64,7 +69,7 @@ Future<void> main() async {
       await Future.forEach(users, (user) async {
         var reminder_data = await user.reference.collection('reminders').get();
         reminder_data.forEach((doc) {
-          Reminder reminder = Reminder.fromFirebase(doc, user.id);
+          Reminder reminder = Reminder.fromFirebase(doc, doc.id, user.id);
           reminders.add(reminder);
           notifiers[user.id].keys.forEach((not_id) {
             // this is a new or modifield notifier, therefore stop the old one and
@@ -82,6 +87,8 @@ Future<void> main() async {
 
             // Only create schedules that're supposed to start approximately now
             var now = DateTime.now().toUtc();
+            print('now: ${now.toIso8601String()}');
+            print('next_time: ${reminder.next_time.toIso8601String()}');
             if (now.add(Duration(minutes: 5)).isAfter(reminder.next_time) &&
                 now
                     .subtract(Duration(minutes: 5))
@@ -95,7 +102,7 @@ Future<void> main() async {
                 name: '${user.id}-${doc.id}-${not_id}',
                 timeout: Duration(minutes: 5),
                 task: () async {
-                  print('Poking Telegram');
+                  print('Poking Notifiers');
 //                  await notifiers[user.id][not_id].settings.getUpdate();
                   final result = await notifiers[user.id][not_id]
                       .settings
@@ -126,12 +133,21 @@ Future<void> main() async {
 }
 
 // NotifierService?
-Map<String, NotifierService> loadServices(Map serviceData) {
-  TelegramService newService = TelegramService();
-  newService.fromFirebase(serviceData['Telegram']);
+Map<String, NotifierService> loadServices(Map serviceData, Map userData) {
+  TelegramService teleService = TelegramService();
+  MobileService mobileService = MobileService();
+  teleService.fromFirebase(serviceData['Telegram']);
+  teleService.fromUser(userData);
+  mobileService.fromFirebase(serviceData['Mobile']);
+  mobileService.fromUser(userData);
 
-  return <String, NotifierService>{'Engine.Telegram': newService};
+
+  return <String, NotifierService>{
+    'Engine.Telegram': teleService,
+    'Engine.Mobile': mobileService,
+  };
 }
+
 /// Fetches each user's notifier settings from FireBase
 ///
 /// Each user may setup one or more notifiers, one of each type
@@ -184,16 +200,19 @@ void startServices(Map services) {
 }
 
 Future<void> saveServices(firestore, Map services) async {
-  for(var service in services.values) {
+  for (var service in services.values) {
     var saveData = service.forFirebase();
-     await firestore.collection('services').document(saveData['name']).set(saveData['data']);
+    await firestore
+        .collection('services')
+        .document(saveData['name'])
+        .set(saveData['data']);
   }
 }
 
 void checkSchedulers(Map services, Map schedulers, List reminders) {
   // Check if any tasks have been done (or claimed to be!)
   services.forEach((name, service) {
-  // finished Reminder ids:
+    // finished Reminder ids:
     List<dynamic> done = service.getFinishedTasks();
 
     // need to find the matching schedulers
@@ -217,8 +236,8 @@ void checkSchedulers(Map services, Map schedulers, List reminders) {
         var notsCopy = Map.from(doc.value);
         for (MapEntry notification in notsCopy.entries) {
           notification.value.stop();
-          schedulers[reminders[remIndex].owner_id][doc_id].remove(
-              notification.key);
+          schedulers[reminders[remIndex].owner_id][doc_id]
+              .remove(notification.key);
         } // notifications
       } // docs
     } // users

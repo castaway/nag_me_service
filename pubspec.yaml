@@ -13,8 +13,6 @@ dependencies:
   safe_config: ^2.0.2
   nag_me_lib:
     path: ../nag_me_lib
-  nag_me_services:
-    path: ../nag_me_services
 
 dev_dependencies:
   build_runner: ^1.10.0
