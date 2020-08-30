@@ -19,11 +19,11 @@ class Scheduler {
 
   Scheduler()
       : _schedulers =
-  <String, Map<String, Map<String, NeatPeriodicTaskScheduler>>>{
-    'firebase-poller': {
-      'top': {'top': null}
-    }
-  };
+            <String, Map<String, Map<String, NeatPeriodicTaskScheduler>>>{
+          'firebase-poller': {
+            'top': {'top': null}
+          }
+        };
 
   // do once actions
   Future<void> setup() async {
@@ -88,7 +88,7 @@ class Scheduler {
         // one schedule per reminder & notifier!?
         await Future.forEach(_users, (user) async {
           var reminder_data =
-          await user.reference.collection('reminders').get();
+              await user.reference.collection('reminders').get();
           reminder_data.forEach((doc) {
             var reminder = Reminder.fromFirebase(doc, doc.id, user.id);
             reminders.add(reminder);
@@ -103,8 +103,10 @@ class Scheduler {
                 _schedulers[user.id][doc.id].remove(not_id);
               }
 
-              _schedulers[user.id] ??= <String, Map<String, NeatPeriodicTaskScheduler>>{};
-              _schedulers[user.id][doc.id] ??= <String, NeatPeriodicTaskScheduler>{};
+              _schedulers[user.id] ??=
+                  <String, Map<String, NeatPeriodicTaskScheduler>>{};
+              _schedulers[user.id]
+                  [doc.id] ??= <String, NeatPeriodicTaskScheduler>{};
 
               // Only create schedules that're supposed to start approximately now
               var now = DateTime.now().toUtc();
@@ -120,45 +122,43 @@ class Scheduler {
                 // it couldnt be started properly (to retry again next time)
                 _schedulers[user.id][doc.id][not_id] =
                     NeatPeriodicTaskScheduler(
-                      interval: Duration(minutes: 30),
-                      name: '${user.id}-${doc.id}-${not_id}',
-                      timeout: Duration(minutes: 5),
-                      task: () async {
-                        print('Poking Notifiers');
-                        final result = await _notifiers[user.id][not_id]
-                            .settings
-                            .notifyUser(reminder);
-                        print(
-                            'Notified via ${_notifiers[user.id][not_id].engine
-                                .toString()}: $result');
-                      },
-                      minCycle: Duration(minutes: 3),
-                    );
+                  interval: Duration(minutes: 30),
+                  name: '${user.id}-${doc.id}-${not_id}',
+                  timeout: Duration(minutes: 5),
+                  task: () async {
+                    print('Poking Notifiers');
+                    final result = await _notifiers[user.id][not_id]
+                        .settings
+                        .notifyUser(reminder);
+                    print(
+                        'Notified via ${_notifiers[user.id][not_id].engine.toString()}: $result');
+                  },
+                  minCycle: Duration(minutes: 3),
+                );
                 _schedulers[user.id][doc.id][not_id].start();
               }
             }); // notifiers.forEach
           }); // remider_data.forEach
         }); // Future.forEach
 
-// stop/remove any that have been responded to
-        checkSchedulers(_services, _schedulers, reminders);
-// This may have updated reminders
+        // stop/remove any that have been responded to
+        checkSchedulers(reminders);
+        // This may have updated reminders
         await updateReminders(_firestore, reminders);
+
+        // check if anyone asked us any questions
+        respondToQueries(reminders);
       },
       minCycle: Duration(seconds: 10),
     );
     _schedulers['firebase-poller']['top']['top'].start();
-// ctrl-c?
-    await ProcessSignal.sigint
-        .watch()
-        .first;
-// shut down main, backup services
+    // ctrl-c?
+    await ProcessSignal.sigint.watch().first;
+    // shut down main, backup services
     await _schedulers['firebase-poller']['top']['top'].stop();
     await saveServices(_firestore, _services);
   }
 
-
-// NotifierService?
   void loadServices() {
     var teleService = TelegramService();
     var mobileService = MobileService();
@@ -168,7 +168,7 @@ class Scheduler {
     mobileService.fromUser(_userData);
 
     if (_services.isEmpty) {
-      _services =  <String, NotifierService>{
+      _services = <String, NotifierService>{
         'Engine.Telegram': teleService,
         'Engine.Mobile': mobileService,
       };
@@ -180,13 +180,13 @@ class Scheduler {
   /// Each user may setup one or more notifiers, one of each type
   /// We should only have one service object per notifier type, so we copy it across
   /// returns a Map of user_id:notifier_id:Notifier object
-  Future<Map<String, Map<String, Notifier>>> getChangedNotifiers(users,
-      Map notifiers, Map services) async {
+  Future<Map<String, Map<String, Notifier>>> getChangedNotifiers(
+      users, Map notifiers, Map services) async {
     var result = <String, Map<String, Notifier>>{};
 
     await Future.forEach(users, (user) async {
-      var notification_data = await user.reference.collection('notifiers')
-          .get();
+      var notification_data =
+          await user.reference.collection('notifiers').get();
       await Future.forEach(notification_data, (notification) async {
         // Add service object if available
 
@@ -204,12 +204,9 @@ class Scheduler {
               .isBefore(checkNotifier.last_modified)) {
             checkNotifier.has_changed = true;
           }
-          // Collect service object for this type of notifier
-          services[notification['engine']] ??=
-              notifiers[user.id][notification.id].settings.service;
-        } else {
-          services[notification['engine']] ??= checkNotifier.settings.service;
         }
+        services[notification['engine']]
+            .userKeys[checkNotifier.settings.username] ??= user.id;
 //      if(serviceData != null) {
 //        services[notification['engine']].fromFirebase(
 //            serviceData[checkNotifier.settings.name]);
@@ -238,9 +235,9 @@ class Scheduler {
     }
   }
 
-  void checkSchedulers(Map services, Map schedulers, List reminders) {
+  void checkSchedulers(List reminders) {
     // Check if any tasks have been done (or claimed to be!)
-    services.forEach((name, service) {
+    _services.forEach((name, service) {
       // finished Reminder ids:
       List<dynamic> done = service.getFinishedTasks();
 
@@ -251,7 +248,7 @@ class Scheduler {
 
       // Lots of shallow copies (Map.from) in this, else we can't remove() the item at the end
       var endingSchedules = [];
-      var schedulersCopy = Map.from(schedulers);
+      var schedulersCopy = Map.from(_schedulers);
       for (var user in schedulersCopy.entries) {
         var docsCopy = Map.from(user.value);
         endingSchedules =
@@ -265,7 +262,7 @@ class Scheduler {
           var notsCopy = Map.from(doc.value);
           for (var notification in notsCopy.entries) {
             notification.value.stop();
-            schedulers[reminders[remIndex].owner_id][doc_id]
+            _schedulers[reminders[remIndex].owner_id][doc_id]
                 .remove(notification.key);
           } // notifications
         } // docs
@@ -287,4 +284,30 @@ class Scheduler {
     }
   }
 
+  // Poll services for any incoming queries
+  void respondToQueries(List reminders) {
+    _services.forEach((name, service) {
+      // finished Reminder ids:
+      Map queries = service.incomingCommands;
+
+      for (var user_id in queries.keys) {
+        for (var command in queries[user_id]) {
+          MapEntry who = service.userKeys.entries
+              .firstWhere((entry) => entry.value == user_id, orElse: () {
+            print('No matching users');
+            return null;
+          });
+
+          if (command == '/reminders') {
+            print('Responding...');
+            String reminderStr =
+                reminders.map((reminder) => reminder.asString()).join('\n');
+            service.sendMessage(who.key, null, reminderStr);
+          }
+        }
+      }
+
+      service.clearCommands();
+    }); // _services.forEach
+  }
 }
