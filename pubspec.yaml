@@ -11,6 +11,7 @@ dependencies:
   firedart: ^0.8.2
   hive: ^1.4.1+1
   safe_config: ^2.0.2
+  logging: ^0.11.4
   nag_me_lib:
     path: ../nag_me_lib
 
