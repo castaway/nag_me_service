@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:neat_periodic_task/neat_periodic_task.dart';
 import 'package:firedart/firedart.dart';
+import 'package:logging/logging.dart';
 import 'package:nag_me_lib/nag_me.dart';
 import 'package:nag_me_lib/nag_me_services.dart';
 import 'config.dart';
@@ -71,6 +72,16 @@ class Scheduler {
     // TODO: Stop+start if we loaded new services!
     // Should do this in/from updateFromStorage?
     startServices(_services);
+
+    // Configure logging so that we see scheduler output/debugging:
+    Logger.root.level = Level.ALL; // defaults to Level.INFO
+    Logger.root.onRecord.listen((record) {
+      print('${record.level.name}: ${record.time}: ${record.message}');
+      if(record.error != null) {
+        print('Error: ${record.error}, StackTrace: ${record.stackTrace
+            .toString()}');
+      }
+    });
 
     //final Map<String, Map<String, Map<String, NeatPeriodicTaskScheduler>>>> schedulers = {};
     _schedulers['firebase-poller']['top']['top'] = NeatPeriodicTaskScheduler(
@@ -160,19 +171,17 @@ class Scheduler {
   }
 
   void loadServices() {
-    var teleService = TelegramService();
-    var mobileService = MobileService();
-    teleService.fromFirebase(_serviceData['Telegram']);
-    teleService.fromUser(_userData);
-    mobileService.fromFirebase(_serviceData['Mobile']);
-    mobileService.fromUser(_userData);
+    TelegramService.getInstance().then((teleService) {
+      teleService.fromFirebase(_serviceData['Telegram']);
+      teleService.fromUser(_userData);
+      _services['Engine.Telegram'] ??= teleService;
+    });
 
-    if (_services.isEmpty) {
-      _services = <String, NotifierService>{
-        'Engine.Telegram': teleService,
-        'Engine.Mobile': mobileService,
-      };
-    }
+    MobileService.getInstance().then((mobileService) {
+       mobileService.fromFirebase(_serviceData['Mobile']);
+       mobileService.fromUser(_userData);
+       _services['Engine.Mobile'] ??= mobileService;
+    });
   }
 
   /// Fetches each user's notifier settings from FireBase
@@ -205,8 +214,10 @@ class Scheduler {
             checkNotifier.has_changed = true;
           }
         }
-        services[notification['engine']]
+        if(services.containsKey(notification['engine'])) {
+          services[notification['engine']]
             .userKeys[checkNotifier.settings.username] ??= user.id;
+        }
 //      if(serviceData != null) {
 //        services[notification['engine']].fromFirebase(
 //            serviceData[checkNotifier.settings.name]);
@@ -286,6 +297,8 @@ class Scheduler {
 
   // Poll services for any incoming queries
   void respondToQueries(List reminders) {
+    // test:
+    // _services['Engine.Telegram'].sendMessage('castaway', 'testid', 'blahblah');
     _services.forEach((name, service) {
       // finished Reminder ids:
       Map queries = service.incomingCommands;
@@ -298,11 +311,20 @@ class Scheduler {
             return null;
           });
 
-          if (command == '/reminders') {
+          // Using the id of the incoming message as the key to follow any responses
+          if (command['text'] == '/reminders') {
             print('Responding...');
+            reminders.sort((r1, r2) => r1.next_time.compareTo(r2.next_time));
+            int counter = 1;
             String reminderStr =
-                reminders.map((reminder) => reminder.asString()).join('\n');
-            service.sendMessage(who.key, null, reminderStr);
+                reminders.map((reminder) => '${counter++}: ${reminder.displayString()}').join('\n');
+            print(reminderStr);
+            // print('Send: $reminderStr to ${who.key}, id: ${command['id']}');
+            Map reminderList = {
+              'text': reminderStr,
+              'create_buttons': List.generate(counter, (index) => '/edit ${index+1}'),
+            };
+            service.sendMessage(who.key, command['id'].toString(), reminderList);
           }
         }
       }
