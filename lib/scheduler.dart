@@ -173,16 +173,19 @@ class Scheduler {
   }
 
   void loadServices() {
-    TelegramService.getInstance().then((teleService) {
+    Map<String, Function> callbacks = {
+      'reminder_list': getReminderString,
+    };
+    TelegramService.getInstance(callbacks).then((teleService) {
       teleService.fromFirebase(_serviceData['Telegram']);
       teleService.fromUser(_userData);
       _services['Engine.Telegram'] ??= teleService;
     });
 
-    MobileService.getInstance().then((mobileService) {
-       mobileService.fromFirebase(_serviceData['Mobile']);
-       mobileService.fromUser(_userData);
-       _services['Engine.Mobile'] ??= mobileService;
+    MobileService.getInstance(callbacks).then((mobileService) {
+      mobileService.fromFirebase(_serviceData['Mobile']);
+      mobileService.fromUser(_userData);
+      _services['Engine.Mobile'] ??= mobileService;
     });
   }
 
@@ -309,6 +312,34 @@ class Scheduler {
           .document(reminder.id)
           .set(asMap);
     }
+  }
+
+  String getUserFromId(String serviceName, String user_id) {
+    final who = _services[serviceName]
+        .userKeys
+        .entries
+        .firstWhere((entry) => entry.value == user_id, orElse: () {
+      print('No matching users');
+      // FIXME: Exception?
+      return null;
+    });
+    return who ?? who.key;
+  }
+
+  String getReminderString(String serviceName, String user_id) {
+    if(_reminders.isEmpty) {
+      return '';
+    }
+    final sortedReminders =
+    _reminders.where((r) => r.owner_id == user_id).toList();
+    sortedReminders
+        .sort((r1, r2) => r1.next_time.compareTo(r2.next_time));
+    int counter = 1;
+    String reminderStr = sortedReminders
+        .map((reminder) => '${counter++}: ${reminder.displayString()}')
+        .join('\n');
+    print(reminderStr);
+    return reminderStr;
   }
 
   // Poll services for any incoming queries
