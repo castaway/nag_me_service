@@ -17,6 +17,7 @@ class Scheduler {
   var _serviceData = {};
   var _services = <String, NotifierService>{};
   Map<String, Map<String, Notifier>> _notifiers;
+  var _reminders = <Reminder>[];
 
   Scheduler()
       : _schedulers =
@@ -63,6 +64,9 @@ class Scheduler {
 
     // Fetch initial set of notifiers, we need to start a service per type:
     _notifiers = await getChangedNotifiers(_users, _notifiers ?? {}, _services);
+
+    // Load reminders
+    _reminders = await getReminders(_users);
   }
 
   Future<void> start() async {
@@ -77,9 +81,9 @@ class Scheduler {
     Logger.root.level = Level.ALL; // defaults to Level.INFO
     Logger.root.onRecord.listen((record) {
       print('${record.level.name}: ${record.time}: ${record.message}');
-      if(record.error != null) {
-        print('Error: ${record.error}, StackTrace: ${record.stackTrace
-            .toString()}');
+      if (record.error != null) {
+        print(
+            'Error: ${record.error}, StackTrace: ${record.stackTrace.toString()}');
       }
     });
 
@@ -95,70 +99,68 @@ class Scheduler {
         // Map of user_id.notifier_id.NotifierObject
         await updateFromStorage();
         print(_notifiers.keys);
-        var reminders = <Reminder>[];
         // one schedule per reminder & notifier!?
         await Future.forEach(_users, (user) async {
-          var reminder_data =
-              await user.reference.collection('reminders').get();
-          reminder_data.forEach((doc) {
-            var reminder = Reminder.fromFirebase(doc, doc.id, user.id);
-            reminders.add(reminder);
-            _notifiers[user.id].keys.forEach((not_id) {
-              // this is a new or modifield notifier, therefore stop the old one and
-              // create another after (if its running)
-              if (_notifiers[user.id][not_id].has_changed &&
-                  _schedulers.containsKey(user.id) &&
-                  _schedulers[user.id].containsKey(doc.id) &&
-                  _schedulers[user.id][doc.id].containsKey(not_id)) {
-                _schedulers[user.id][doc.id][not_id].stop();
-                _schedulers[user.id][doc.id].remove(not_id);
-              }
+          _reminders.where((r) => r.owner_id == user.id).forEach((reminder) {
+            if (_notifiers.containsKey(user.id)) {
+              _notifiers[user.id].keys.forEach((not_id) {
+                // this is a new or modifield notifier, therefore stop the old one and
+                // create another after (if its running)
+                if (_notifiers[user.id][not_id].has_changed &&
+                    _schedulers.containsKey(user.id) &&
+                    _schedulers[user.id].containsKey(reminder.id) &&
+                    _schedulers[user.id][reminder.id].containsKey(not_id)) {
+                  _schedulers[user.id][reminder.id][not_id].stop();
+                  _schedulers[user.id][reminder.id].remove(not_id);
+                }
 
-              _schedulers[user.id] ??=
-                  <String, Map<String, NeatPeriodicTaskScheduler>>{};
-              _schedulers[user.id]
-                  [doc.id] ??= <String, NeatPeriodicTaskScheduler>{};
+                _schedulers[user.id] ??=
+                <String, Map<String, NeatPeriodicTaskScheduler>>{};
+                _schedulers[user.id]
+                [reminder.id] ??= <String, NeatPeriodicTaskScheduler>{};
 
-              // Only create schedules that're supposed to start approximately now
-              var now = DateTime.now().toUtc();
-              print('now: ${now.toIso8601String()}');
-              print('next_time: ${reminder.next_time.toIso8601String()}');
-              if (now.add(Duration(minutes: 5)).isAfter(reminder.next_time) &&
-                  now
-                      .subtract(Duration(minutes: 5))
-                      .isBefore(reminder.next_time) &&
-                  !_schedulers[user.id][doc.id].containsKey(not_id)) {
-                print('Creating schedule for ${reminder.reminder_text}');
-                // TODO: This should remove the schedule if for some reason
-                // it couldnt be started properly (to retry again next time)
-                _schedulers[user.id][doc.id][not_id] =
-                    NeatPeriodicTaskScheduler(
-                  interval: Duration(minutes: 30),
-                  name: '${user.id}-${doc.id}-${not_id}',
-                  timeout: Duration(minutes: 5),
-                  task: () async {
-                    print('Poking Notifiers');
-                    final result = await _notifiers[user.id][not_id]
-                        .settings
-                        .notifyUser(reminder);
-                    print(
-                        'Notified via ${_notifiers[user.id][not_id].engine.toString()}: $result');
-                  },
-                  minCycle: Duration(minutes: 3),
-                );
-                _schedulers[user.id][doc.id][not_id].start();
-              }
-            }); // notifiers.forEach
+                // Only create schedules that're supposed to start approximately now
+                var now = DateTime.now().toUtc();
+                print('now: ${now.toIso8601String()}');
+                print('next_time: ${reminder.next_time.toIso8601String()}');
+                if (now.add(Duration(minutes: 5)).isAfter(reminder.next_time) &&
+                    now
+                        .subtract(Duration(minutes: 5))
+                        .isBefore(reminder.next_time) &&
+                    !_schedulers[user.id][reminder.id].containsKey(not_id)) {
+                  print('Creating schedule for ${reminder.reminder_text}');
+                  // TODO: This should remove the schedule if for some reason
+                  // it couldnt be started properly (to retry again next time)
+                  _schedulers[user.id][reminder.id][not_id] =
+                      NeatPeriodicTaskScheduler(
+                        interval: Duration(minutes: 30),
+                        name: '${user.id}-${reminder.id}-${not_id}',
+                        timeout: Duration(minutes: 5),
+                        task: () async {
+                          print('Poking Notifiers');
+                          final result = await _notifiers[user.id][not_id]
+                              .settings
+                              .notifyUser(reminder);
+                          print(
+                              'Notified via ${_notifiers[user.id][not_id].engine
+                                  .toString()}: $result');
+                        },
+                        minCycle: Duration(minutes: 3),
+                      );
+                  _schedulers[user.id][reminder.id][not_id].start();
+                }
+              }); // notifiers.forEach
+            }
           }); // remider_data.forEach
         }); // Future.forEach
 
         // stop/remove any that have been responded to
-        checkSchedulers(reminders);
+        checkSchedulers();
         // This may have updated reminders
-        await updateReminders(_firestore, reminders);
+        await updateReminders(_firestore);
 
         // check if anyone asked us any questions
-        respondToQueries(reminders);
+        respondToQueries();
       },
       minCycle: Duration(seconds: 10),
     );
@@ -214,9 +216,9 @@ class Scheduler {
             checkNotifier.has_changed = true;
           }
         }
-        if(services.containsKey(notification['engine'])) {
+        if (services.containsKey(notification['engine'])) {
           services[notification['engine']]
-            .userKeys[checkNotifier.settings.username] ??= user.id;
+              .userKeys[checkNotifier.settings.username] ??= user.id;
         }
 //      if(serviceData != null) {
 //        services[notification['engine']].fromFirebase(
@@ -227,6 +229,19 @@ class Scheduler {
       });
     });
     return result;
+  }
+
+  Future<List<Reminder>> getReminders(users) async {
+    List<Reminder> reminders = [];
+    await Future.forEach(users, (user) async {
+      var reminder_data =
+      await user.reference.collection('reminders').get();
+      reminder_data.forEach((doc) {
+        var reminder = Reminder.fromFirebase(doc, doc.id, user.id);
+        reminders.add(reminder);
+      });
+    });
+    return reminders;
   }
 
   void startServices(Map services) {
@@ -246,7 +261,7 @@ class Scheduler {
     }
   }
 
-  void checkSchedulers(List reminders) {
+  void checkSchedulers() {
     // Check if any tasks have been done (or claimed to be!)
     _services.forEach((name, service) {
       // finished Reminder ids:
@@ -267,13 +282,13 @@ class Scheduler {
 
         for (var doc in endingSchedules) {
           var doc_id = doc.key;
-          var remIndex = reminders.indexWhere((rem) => rem.id == doc_id);
+          var remIndex = _reminders.indexWhere((rem) => rem.id == doc_id);
           // Need to update the reminder object in place
-          reminders[remIndex].taskDone();
+          _reminders[remIndex].taskDone();
           var notsCopy = Map.from(doc.value);
           for (var notification in notsCopy.entries) {
             notification.value.stop();
-            _schedulers[reminders[remIndex].owner_id][doc_id]
+            _schedulers[_reminders[remIndex].owner_id][doc_id]
                 .remove(notification.key);
           } // notifications
         } // docs
@@ -283,12 +298,13 @@ class Scheduler {
 
 // Store the updated "next dates" back to Firestore.
 // Should probably only do the changed ones
-  void updateReminders(Firestore firestore, List reminders) async {
-    for (Reminder reminder in reminders) {
+  void updateReminders(Firestore firestore) async {
+    for (Reminder reminder in _reminders) {
       var asMap = reminder.toMap();
+      var owner_id = asMap.remove('owner_id');
       await firestore
           .collection('users')
-          .document(asMap['owner_id'])
+          .document(owner_id)
           .collection('reminders')
           .document(reminder.id)
           .set(asMap);
@@ -296,7 +312,7 @@ class Scheduler {
   }
 
   // Poll services for any incoming queries
-  void respondToQueries(List reminders) {
+  void respondToQueries() {
     // test:
     // _services['Engine.Telegram'].sendMessage('castaway', 'testid', 'blahblah');
     _services.forEach((name, service) {
@@ -314,17 +330,26 @@ class Scheduler {
           // Using the id of the incoming message as the key to follow any responses
           if (command['text'] == '/reminders') {
             print('Responding...');
-            reminders.sort((r1, r2) => r1.next_time.compareTo(r2.next_time));
+            final sortedReminders =
+                _reminders.where((r) => r.owner_id == user_id).toList();
+            sortedReminders
+                .sort((r1, r2) => r1.next_time.compareTo(r2.next_time));
             int counter = 1;
-            String reminderStr =
-                reminders.map((reminder) => '${counter++}: ${reminder.displayString()}').join('\n');
+            String reminderStr = sortedReminders
+                .map((reminder) => '${counter++}: ${reminder.displayString()}')
+                .join('\n');
             print(reminderStr);
             // print('Send: $reminderStr to ${who.key}, id: ${command['id']}');
             Map reminderList = {
               'text': reminderStr,
-              'create_buttons': List.generate(counter, (index) => '/edit ${index+1}'),
+              'create_buttons':
+                  List.generate(counter, (index) => '/edit ${index + 1}'),
             };
-            service.sendMessage(who.key, command['id'].toString(), reminderList);
+            service.sendMessage(
+                who.key, command['id'].toString(), reminderList);
+          }
+          if (command['text'].startsWith('/edit')) {
+            // how to edit a reminder..
           }
         }
       }
