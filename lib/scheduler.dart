@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:neat_periodic_task/neat_periodic_task.dart';
 import 'package:firedart/firedart.dart';
 import 'package:logging/logging.dart';
+import 'package:email_validator/email_validator.dart';
 import 'package:nag_me_lib/nag_me.dart';
 import 'package:nag_me_lib/nag_me_services.dart';
 import 'config.dart';
@@ -177,7 +178,7 @@ class Scheduler {
         await updateReminders();
 
         // check if anyone asked us any questions
-        respondToQueries();
+        //respondToQueries();
       },
       minCycle: Duration(seconds: 10),
     );
@@ -194,6 +195,8 @@ class Scheduler {
       'reminder_list': getReminderList,
       'finish_task': finishTask,
       'update_reminders': updateReminders,
+      'check_user': checkUser,
+      'create_user': createUser,
     };
     TelegramService.getInstance(callbacks).then((teleService) {
       teleService.fromFirebase(_serviceData['Telegram']);
@@ -283,7 +286,7 @@ class Scheduler {
     }
   }
 
-  // Stop running scheduler(s), update time on finished reminder
+  // Callback: Stop running scheduler(s), update time on finished reminder
   Future<bool> finishTask(String user_id, String reminderId) async {
     // Lots of shallow copies (Map.from) in this, else we can't remove() the item at the end
     var endingSchedules = [];
@@ -355,6 +358,58 @@ class Scheduler {
     return who ?? who.key;
   }
 
+  // Callback: - Service name, username => id?
+  // Any notifiers anywhere with this username?
+  bool checkUser(String serviceName, String username) {
+    for (var user in _notifiers.entries) {
+      for (var notifier in user.value.entries) {
+        if (notifier.value.settings.username == username) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  Future<bool> createUser(String serviceName, String username, Map loginData) async {
+    final isValid = EmailValidator.validate(loginData['email']) &&
+    loginData['password'].length >= 6;
+
+    if (!isValid) {
+      print('Email or password invalid');
+      return false;
+    }
+    final newUser = await this._fbAuth.signUp(loginData['email'], loginData['password']);
+    print('Signed up new user: ${newUser.id}');
+    if (newUser != null) {
+      // FIXME: Here we now need a new Notifier() or similar
+      // Once created (and saved) the next loadNotifiers will setup the userMap for us
+      // or we can set it manually here:
+      // Create user in firestore:
+      await this._firestore.collection('users').document(newUser.id).set({});
+      // Add to service details:
+      _services[serviceName].userKeys[username] = newUser.id;
+      // Create a notifier for the service that created the user
+      var name = serviceName.split('.'); // Engine.Telegram
+      var notifier = Notifier.fromFirebase(
+          {
+            'engine': serviceName,
+            'settings': '{"name": "${name[1]}", "username": "${username}" }',
+          },
+        newUser.id,
+        _services[serviceName]
+      );
+      // and store it (we could probably skip the "make a notifier object step" really)
+      await this._firestore.collection('users').document(newUser.id).collection('notifiers').add(
+      {'engine': serviceName,
+      'settings': notifier.settings.toString(),
+      'last_modified': notifier.last_modified.toString() });
+      return true;
+    }
+    return false;
+  }
+
+  // Callback:
   List<Reminder> getReminderList(String serviceName, String user_id) {
     if(_reminders.isEmpty) {
       return [];
@@ -371,51 +426,51 @@ class Scheduler {
   }
 
   // Poll services for any incoming queries
-  void respondToQueries() {
-    // test:
-    // _services['Engine.Telegram'].sendMessage('castaway', 'testid', 'blahblah');
-    _services.forEach((name, service) {
-      // finished Reminder ids:
-      Map queries = service.incomingCommands;
-
-      for (var user_id in queries.keys) {
-        for (var command in queries[user_id]) {
-          MapEntry who = service.userKeys.entries
-              .firstWhere((entry) => entry.value == user_id, orElse: () {
-            print('No matching users');
-            return null;
-          });
-
-          // Using the id of the incoming message as the key to follow any responses
-          if (command['text'] == '/reminders') {
-            print('Responding...');
-            final sortedReminders =
-                _reminders.where((r) => r.owner_id == user_id).toList();
-            sortedReminders
-                .sort((r1, r2) => r1.next_time.compareTo(r2.next_time));
-            int counter = 1;
-            String reminderStr = sortedReminders
-                .map((reminder) => '${counter++}: ${reminder.displayString()}')
-                .join('\n');
-            print(reminderStr);
-            // print('Send: $reminderStr to ${who.key}, id: ${command['id']}');
-            Map reminderList = {
-              'text': reminderStr,
-              'create_buttons':
-                  List.generate(counter, (index) => '/edit ${index + 1}'),
-            };
-            service.sendMessage(
-                who.key, command['id'].toString(), reminderList);
-          }
-          if (command['text'].startsWith('/edit')) {
-            // how to edit a reminder..
-          }
-        }
-      }
-
-      service.clearCommands();
-    }); // _services.forEach
-  }
+  // void respondToQueries() {
+  //   // test:
+  //   // _services['Engine.Telegram'].sendMessage('castaway', 'testid', 'blahblah');
+  //   _services.forEach((name, service) {
+  //     // finished Reminder ids:
+  //     Map queries = service.incomingCommands;
+  //
+  //     for (var user_id in queries.keys) {
+  //       for (var command in queries[user_id]) {
+  //         MapEntry who = service.userKeys.entries
+  //             .firstWhere((entry) => entry.value == user_id, orElse: () {
+  //           print('No matching users');
+  //           return null;
+  //         });
+  //
+  //         // Using the id of the incoming message as the key to follow any responses
+  //         if (command['text'] == '/reminders') {
+  //           print('Responding...');
+  //           final sortedReminders =
+  //               _reminders.where((r) => r.owner_id == user_id).toList();
+  //           sortedReminders
+  //               .sort((r1, r2) => r1.next_time.compareTo(r2.next_time));
+  //           int counter = 1;
+  //           String reminderStr = sortedReminders
+  //               .map((reminder) => '${counter++}: ${reminder.displayString()}')
+  //               .join('\n');
+  //           print(reminderStr);
+  //           // print('Send: $reminderStr to ${who.key}, id: ${command['id']}');
+  //           Map reminderList = {
+  //             'text': reminderStr,
+  //             'create_buttons':
+  //                 List.generate(counter, (index) => '/edit ${index + 1}'),
+  //           };
+  //           service.sendMessage(
+  //               who.key, command['id'].toString(), reminderList);
+  //         }
+  //         if (command['text'].startsWith('/edit')) {
+  //           // how to edit a reminder..
+  //         }
+  //       }
+  //     }
+  //
+  //     service.clearCommands();
+  //   }); // _services.forEach
+  // }
 
   void logStatus(Map log, String userId) async {
     await this._firestore
