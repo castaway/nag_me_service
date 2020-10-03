@@ -103,6 +103,10 @@ class Scheduler {
         // one schedule per reminder & notifier!?
         await Future.forEach(_users, (user) async {
           _reminders.where((r) => r.owner_id == user.id).forEach((reminder) {
+            // Skip if this reminder is "off"
+            if (reminder.status == ReminderStatus.off) {
+              return;
+            }
             if (_notifiers.containsKey(user.id)) {
               _notifiers[user.id].keys.forEach((not_id) {
                 // this is a new or modifield notifier, therefore stop the old one and
@@ -122,12 +126,14 @@ class Scheduler {
 
                 // Only create schedules that're supposed to start approximately now
                 var now = DateTime.now().toUtc();
-                print('now: ${now.toIso8601String()}');
-                print('next_time: ${reminder.next_time.toIso8601String()}');
+                // Start if:
+                // Not already got a scheduler for this item AND
+                // it should be running (status set but isnt because service crashed for eg) OR
+                // current time is after the time it should have been started
                 if (!_schedulers[user.id][reminder.id].containsKey(not_id) && (
                   reminder.status == ReminderStatus.running || (
-                    now.add(Duration(minutes: 5)).isAfter(reminder.next_time) &&
-                    now.subtract(Duration(minutes: 5)).isBefore(reminder.next_time)
+                    now.add(Duration(minutes: 1)).isAfter(reminder.next_time)
+                    // && now.subtract(Duration(minutes: 5)).isBefore(reminder.next_time)
                     )
                 )
                 ) {
