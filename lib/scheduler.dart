@@ -109,7 +109,7 @@ class Scheduler {
             }
             if (_notifiers.containsKey(user.id)) {
               _notifiers[user.id].keys.forEach((not_id) {
-                // this is a new or modifield notifier, therefore stop the old one and
+                // this is a new or modified notifier, therefore stop the old one and
                 // create another after (if its running)
                 if (_notifiers[user.id][not_id].has_changed &&
                     _schedulers.containsKey(user.id) &&
@@ -117,6 +117,27 @@ class Scheduler {
                     _schedulers[user.id][reminder.id].containsKey(not_id)) {
                   _schedulers[user.id][reminder.id][not_id].stop();
                   _schedulers[user.id][reminder.id].remove(not_id);
+                }
+
+                if(
+                     _schedulers.containsKey(user.id) &&
+                     _schedulers[user.id].containsKey(reminder.id) &&
+                     _schedulers[user.id][reminder.id].containsKey(not_id) &&
+                //     _schedulers?[user.id]?[reminder.id]?[not_id] != null &&
+                    reminder.aboutToOverrun()) {
+                    logStatus({
+                      'time': DateTime.now().
+                      toIso8601String(),
+                      'status': 'OverrunTask',
+                      'reminder': reminder.id,
+                  }, user.id);
+
+                  _schedulers[user.id][reminder.id][not_id].stop();
+                  _schedulers[user.id][reminder.id].remove(not_id);
+
+                  reminder.taskDone();
+                  _notifiers[user.id][not_id].settings.stopReminder(reminder);
+
                 }
 
                 _schedulers[user.id] ??=

@@ -12,6 +12,7 @@ build/
 doc/api/
 **/telegram_config.yaml
 **/firebase_config.yaml
+**/mobile_config.yaml
 
 .idea/
 *~
