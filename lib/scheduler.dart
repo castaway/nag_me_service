@@ -224,6 +224,7 @@ class Scheduler {
       'update_reminders': updateReminders,
       'check_user': checkUser,
       'create_user': createUser,
+      'update_user': updateUser,
     };
     TelegramService.getInstance(callbacks).then((teleService) {
       teleService.fromFirebase(_serviceData['Telegram']);
@@ -398,6 +399,12 @@ class Scheduler {
     return false;
   }
 
+  // Update user content, should we check whats in userData??
+  Future<bool> updateUser(String serviceName, String userId, Map userData) async {
+     await this._firestore.collection('users').document(userId).update(userData);
+  }
+
+  // callback, setup new user: from service, service username, login user/pass
   Future<bool> createUser(String serviceName, String username, Map loginData) async {
     final isValid = EmailValidator.validate(loginData['email']) &&
     loginData['password'].length >= 6;
