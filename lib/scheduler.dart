@@ -3,6 +3,7 @@ import 'package:neat_periodic_task/neat_periodic_task.dart';
 import 'package:firedart/firedart.dart';
 import 'package:logging/logging.dart';
 import 'package:email_validator/email_validator.dart';
+import 'package:time_machine/time_machine.dart';
 import 'package:nag_me_lib/nag_me.dart';
 import 'package:nag_me_lib/nag_me_services.dart';
 import 'config.dart';
@@ -14,9 +15,9 @@ class Scheduler {
   Firestore _firestore;
   Page<Document> _users;
   final _schedulers;
-  var _userData = <String, Map>{};
+  Map<String, Map> _userData = <String, Map>{};
   var _serviceData = {};
-  var _services = <String, NotifierService>{};
+  Map<String, NotifierService> _services = <String, NotifierService>{};
   Map<String, Map<String, Notifier>> _notifiers;
   var _reminders = <Reminder>[];
 
@@ -30,6 +31,7 @@ class Scheduler {
 
   // do once actions
   Future<void> setup() async {
+    await TimeMachine.initialize();
     _fbConfig = FirebaseConfig(
         Platform.script.resolve('firebase_config.yaml').toFilePath());
 
@@ -44,18 +46,29 @@ class Scheduler {
   }
 
   Future updateFromStorage() async {
+    // timezone db:
+    final tzdb = await DateTimeZoneProviders.tzdb;
+
     // All users
-    _users = await _firestore.collection('users').get();
+    this._users = await _firestore.collection('users').get();
     // user saved data:
-    _userData = {};
-    await Future.forEach(_users, (user) {
-      _userData[user.id] = user.map;
+    // Map<String, dynamic>_userData = {};
+    await Future.forEach(this._users, (Document user) async {
+        _userData[user.id] = user.map;
+        if (_userData[user.id].containsKey('timezone') &&
+            tzdb.getZoneOrNull(_userData[user.id]['timezone'].toString()) !=
+                null) {
+          _userData[user.id]['zone'] =
+          await tzdb[_userData[user.id]['timezone'].toString()];
+        } else {
+          _userData[user.id]['zone'] = await tzdb.getSystemDefault();
+        }
     });
 
     // service saved data:
-    final _savedServiceData = await _firestore.collection('services').get();
+    final Page<Document>_savedServiceData = await _firestore.collection('services').get();
     _serviceData = {};
-    await Future.forEach(_savedServiceData, (service) {
+    await Future.forEach(_savedServiceData, (Document service) {
       _serviceData[service.id] = service.map;
     });
 
@@ -101,13 +114,14 @@ class Scheduler {
         await updateFromStorage();
         print(_notifiers.keys);
         // one schedule per reminder & notifier!?
-        await Future.forEach(_users, (user) async {
+        await Future.forEach(_users, (Document user) async {
           _reminders.where((r) => r.owner_id == user.id).forEach((reminder) {
             // Skip if this reminder is "off"
             if (reminder.status == ReminderStatus.off) {
               return;
             }
-            if (_notifiers.containsKey(user.id)) {
+            if (_notifiers.containsKey(user.id) && _notifiers[user.id] != null ) {
+              Map<String, Notifier> userNotifier = _notifiers[user.id];
               _notifiers[user.id].keys.forEach((not_id) {
                 // this is a new or modified notifier, therefore stop the old one and
                 // create another after (if its running)
@@ -146,14 +160,14 @@ class Scheduler {
                 [reminder.id] ??= <String, NeatPeriodicTaskScheduler>{};
 
                 // Only create schedules that're supposed to start approximately now
-                var now = DateTime.now().toUtc();
+                var now = Instant.now();
                 // Start if:
                 // Not already got a scheduler for this item AND
                 // it should be running (status set but isnt because service crashed for eg) OR
                 // current time is after the time it should have been started
                 if (!_schedulers[user.id][reminder.id].containsKey(not_id) && (
                   reminder.status == ReminderStatus.running || (
-                    now.add(Duration(minutes: 1)).isAfter(reminder.next_time)
+                    now.add(Time(minutes: 1)).isAfter(reminder.next_time)
                     // && now.subtract(Duration(minutes: 5)).isBefore(reminder.next_time)
                     )
                 )
@@ -248,10 +262,10 @@ class Scheduler {
       users, Map notifiers, Map services) async {
     var result = <String, Map<String, Notifier>>{};
 
-    await Future.forEach(users, (user) async {
-      var notification_data =
+    await Future.forEach(users, (Document user) async {
+      Page<Document> notification_data =
           await user.reference.collection('notifiers').get();
-      await Future.forEach(notification_data, (notification) async {
+      await Future.forEach(notification_data, (Document notification) async {
         // Add service object if available
 
         var checkNotifier = Notifier.fromFirebase(
@@ -277,7 +291,7 @@ class Scheduler {
 //        services[notification['engine']].fromFirebase(
 //            serviceData[checkNotifier.settings.name]);
 //      }
-        result[user.id] ??= {};
+        result[user.id] ??= <String, Notifier>{};
         result[user.id][notification.id] = checkNotifier;
       });
     });
@@ -286,11 +300,11 @@ class Scheduler {
 
   Future<List<Reminder>> getReminders(users) async {
     List<Reminder> reminders = [];
-    await Future.forEach(users, (user) async {
+    await Future.forEach(users, (Document user) async {
       var reminder_data =
       await user.reference.collection('reminders').get();
-      reminder_data.forEach((doc) {
-        var reminder = Reminder.fromFirebase(doc, doc.id, user.id);
+      reminder_data.forEach((Document doc) {
+        var reminder = Reminder.fromFirebase(doc, doc.id, user.id, _userData[user.id]['zone']);
         reminders.add(reminder);
       });
     });
@@ -345,6 +359,7 @@ class Scheduler {
       } // docs
     } // users
     await updateReminders();
+    return true;
   }
 
 
@@ -381,9 +396,9 @@ class Scheduler {
         .firstWhere((entry) => entry.value == user_id, orElse: () {
       print('No matching users');
       // FIXME: Exception?
-      return null;
+      return MapEntry('','');
     });
-    return who ?? who.key;
+    return who.key;
   }
 
   // Callback: - Service name, username => id?
