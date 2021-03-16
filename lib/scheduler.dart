@@ -121,7 +121,7 @@ class Scheduler {
               return;
             }
             if (_notifiers.containsKey(user.id) && _notifiers[user.id] != null ) {
-              Map<String, Notifier> userNotifier = _notifiers[user.id];
+//              Map<String, Notifier> userNotifier = _notifiers[user.id];
               _notifiers[user.id].keys.forEach((not_id) {
                 // this is a new or modified notifier, therefore stop the old one and
                 // create another after (if its running)
@@ -216,7 +216,8 @@ class Scheduler {
         // stop/remove any that have been responded to
         // checkSchedulers();
         // Save reminders where status changed:
-        await updateReminders();
+//        await updateReminders();
+        updateReminders();
 
         // check if anyone asked us any questions
         //respondToQueries();
@@ -358,7 +359,7 @@ class Scheduler {
         } // notifications
       } // docs
     } // users
-    await updateReminders();
+    updateReminders();
     return true;
   }
 
@@ -415,7 +416,7 @@ class Scheduler {
   }
 
   // Update user content, should we check whats in userData??
-  Future<bool> updateUser(String serviceName, String userId, Map userData) async {
+  Future<bool> updateUser(String serviceName, String userId, Map<String,dynamic> userData) async {
      await this._firestore.collection('users').document(userId).update(userData);
   }
 
